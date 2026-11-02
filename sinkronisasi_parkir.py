@@ -374,28 +374,56 @@ def run_self_tests(results_without: dict, results_with: dict) -> List[str]:
     msgs.append("✔ Independent gate sync logs present")
     # 4. Lamport causality and message count checks
     def validate_lamport(logs: List[LamportRecord], scenario_name: str):
-        last: Dict[str, int] = {"GateMasuk": 0, "GateKeluar": 0, "ServerPusat": 0}
+        # Expected sender/receiver per message type
+        expected_pair = {
+            "ENTRY": ("GateMasuk", "ServerPusat"),
+            "ACK_ENTRY": ("ServerPusat", "GateMasuk"),
+            "REQ_ENTRY": ("GateKeluar", "ServerPusat"),
+            "RESP_ENTRY": ("ServerPusat", "GateKeluar"),
+            "EXIT_TX": ("GateKeluar", "ServerPusat"),
+        }
+        last_counter: Dict[str, int] = {"GateMasuk": 0, "GateKeluar": 0, "ServerPusat": 0}
         send_info: Dict[Tuple[str, Optional[str]], Tuple[int, float]] = {}
         send_counts: Dict[str, int] = {}
+        recv_seen: set = set()
+        send_seen: set = set()
         for rec in logs:
             if rec.direction == "SEND":
-                send_counts[rec.message] = send_counts.get(rec.message, 0) + 1
-                send_info[(rec.message, rec.vehicle_id)] = (rec.lamport_ts, rec.virtual_time)
-                last[rec.node] = rec.lamport_ts
-            else:  # RECV
+                # node must match expected sender
+                expected_sender, _ = expected_pair[rec.message]
+                assert rec.node == expected_sender, f"SEND of {rec.message} from wrong node {rec.node} (expected {expected_sender}) in {scenario_name}"
                 key = (rec.message, rec.vehicle_id)
+                assert key not in send_seen, f"Duplicate SEND for {rec.message} vehicle {rec.vehicle_id} in {scenario_name}"
+                send_seen.add(key)
+                send_counts[rec.message] = send_counts.get(rec.message, 0) + 1
+                send_info[key] = (rec.lamport_ts, rec.virtual_time)
+                last_counter[rec.node] = rec.lamport_ts
+            else:  # RECV
+                # node must match expected receiver
+                _, expected_receiver = expected_pair[rec.message]
+                assert rec.node == expected_receiver, f"RECV of {rec.message} at wrong node {rec.node} (expected {expected_receiver}) in {scenario_name}"
+                key = (rec.message, rec.vehicle_id)
+                assert key not in recv_seen, f"Duplicate RECV for {rec.message} vehicle {rec.vehicle_id} in {scenario_name}"
+                recv_seen.add(key)
                 assert key in send_info, f"No matching SEND for RECV {rec} in {scenario_name}"
                 send_ts, send_vt = send_info[key]
+                # virtual time ordering
                 assert rec.virtual_time >= send_vt - 1e-12, f"Virtual time regression for {rec} in {scenario_name}"
-                expected = max(last[rec.node], send_ts) + 1
-                assert rec.lamport_ts == expected, (
-                    f"Lamport rule violation at {rec} (expected {expected}) in {scenario_name}"
+                # Lamport rule
+                expected_counter = max(last_counter[rec.node], send_ts) + 1
+                assert rec.lamport_ts == expected_counter, (
+                    f"Lamport rule violation at {rec} (expected {expected_counter}) in {scenario_name}"
                 )
-                last[rec.node] = rec.lamport_ts
+                last_counter[rec.node] = rec.lamport_ts
+        # Ensure each message type sent exactly 4 times (one per vehicle)
         expected_msgs = {"ENTRY", "ACK_ENTRY", "REQ_ENTRY", "RESP_ENTRY", "EXIT_TX"}
         for mtype in expected_msgs:
             cnt = send_counts.get(mtype, 0)
             assert cnt == 4, f"Message {mtype} SEND occurs {cnt} times in {scenario_name}, expected 4"
+        # Ensure total SEND and RECV counts match expected 20 each
+        assert len(send_seen) == 20, f"Total SEND records {len(send_seen)} in {scenario_name}, expected 20"
+        assert len(recv_seen) == 20, f"Total RECV records {len(recv_seen)} in {scenario_name}, expected 20"
+        # Total log length should be 40
         assert len(logs) == 40, f"Lamport log length {len(logs)} in {scenario_name}, expected 40"
     validate_lamport(results_without["lamport_log"], "without sync")
     validate_lamport(results_with["lamport_log"], "with sync")
