@@ -90,7 +90,8 @@ Perbandingan Kedua Scenario
 | Negative durations         | 1          | 0           |
 | Sinkronisasi aktif          | Tidak      | Ya               |
 | Total vehicles processed    | 4          | 4               |
-| Cristian sync rounds       | 0          | 10               |
+| Total sync response events | 0 | 10 |
+| Sync rounds per gate       | 0 | 5  |
 | Immediate sync error (s)   | -          | 0.010000 |
 | Max observed clock error (s) | -          | 0.393968 |
 
