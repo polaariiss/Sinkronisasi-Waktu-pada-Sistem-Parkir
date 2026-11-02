@@ -1,16 +1,4 @@
-# sinkronisasi_parkir.py
-"""Sinkronisasi Waktu pada Sistem Parkir Otomatis
-
-Implementasi simulasi akademik yang menampilkan:
-- tiga node (Gate Masuk, Gate Keluar, Server Pusat)
-- model jam fisik dengan offset & drift
-- algoritma Cristian (request/response) dengan event scheduler
-- lamport logical clock untuk urutan pesan transaksi parkir
-- dua skenario: tanpa sinkronisasi & dengan sinkronisasi
-
-Semua perhitungan dijalankan secara deterministik pada *virtual* time,
-Tanpa menggunakan time.sleep() atau jam sistem nyata.
-"""
+# Sinkronisasi Waktu pada Sistem Parkir Otomatis
 
 from __future__ import annotations
 import math
@@ -18,16 +6,14 @@ import heapq
 from dataclasses import dataclass, field
 from typing import List, Dict, Tuple, Any, Optional
 
-# ------------------------------------------------------------
-# Constants (all deterministic)
-REQ_DELAY = 0.010  # request travel time (seconds)
-RESP_DELAY = 0.030  # response travel time (seconds)
+# Konstanta (semuanya deterministik)
+REQ_DELAY = 0.010  # waktu tempuh request (detik)
+RESP_DELAY = 0.030  # waktu tempuh response (detik)
 RTT = REQ_DELAY + RESP_DELAY  # 0.040 s
 HALF_RTT = RTT / 2.0  # 0.020 s
-SYNC_SCHEDULE = [0, 1800, 3600, 5400, 7200]  # seconds virtual time
+SYNC_SCHEDULE = [0, 1800, 3600, 5400, 7200]  # detik waktu virtual
 
-# ------------------------------------------------------------
-# Data structures
+# Struktur data
 @dataclass(frozen=True)
 class Vehicle:
     vid: str
@@ -66,7 +52,7 @@ class TransactionResult:
     exit_local: float
     observed_duration: float
     tariff: int
-    status: str  # "OK" or "INVALID"
+    status: str  # "OK" atau "INVALID"
     expected_tariff: int
     expected_duration: float
 
@@ -74,13 +60,12 @@ class TransactionResult:
 class LamportRecord:
     virtual_time: float
     node: str
-    direction: str  # SEND or RECV
+    direction: str  # SEND atau RECV
     message: str
     vehicle_id: Optional[str]
     lamport_ts: int
 
-# ------------------------------------------------------------
-# Core simulation components
+# Komponen inti simulasi
 class VirtualClock:
     def __init__(self):
         self.now: float = 0.0
@@ -100,7 +85,7 @@ class ClockNode:
     def __init__(self, name: str, offset: float, drift: float):
         self.name = name
         self.offset = offset
-        self.drift = drift  # seconds per second
+        self.drift = drift  # detik per detik
         self.anchor_time: Optional[float] = None
         self.anchor_value: Optional[float] = None
         self.t0: float = 0.0
@@ -155,39 +140,37 @@ class CentralServer(ClockNode):
         tariff, status = tariff_fn(duration)
         return duration, tariff, status
 
-# ------------------------------------------------------------
-# Helper functions
+# Fungsi helper
 def calculate_tariff(duration_seconds: float) -> Tuple[int, str]:
-    """Return (tariff, status)."""
+    # Mengembalikan (tarif, status).
     if duration_seconds < 0:
         return 0, "INVALID"
     extra = max(0.0, duration_seconds - 3600.0)
     hours = math.ceil(extra / 3600.0)
     return 5000 + 3000 * hours, "OK"
 
-# ------------------------------------------------------------
-# Scheduler and simulation
+# Penjadwal dan simulasi
 class Simulator:
     def __init__(self, with_sync: bool, vehicles: List[Vehicle]):
         self.with_sync = with_sync
         self.vehicles = vehicles
         self.vc = VirtualClock()
-        # Nodes
+        # Node
         self.gate_masuk = ClockNode("GateMasuk", offset=+240.0, drift=+0.001)
         self.gate_keluar = ClockNode("GateKeluar", offset=-300.0, drift=-0.0008)
         self.server = CentralServer()
-        # Initialise anchors
+        # Inisialisasi anchor
         self.gate_masuk.init_anchor(0.0)
         self.gate_keluar.init_anchor(0.0)
         self.server.init_anchor(0.0)
-        # Lamport clocks per node
+        # Clock Lamport per node
         self.lamport_masuk = LamportClock()
         self.lamport_keluar = LamportClock()
         self.lamport_server = self.server.lamport
-        # Event queue
+        # Antrean event
         self.event_queue: List[Tuple[float, int, Event]] = []
         self._tie_counter = 0
-        # Logs
+        # Log
         self.sync_logs: List[SyncLog] = []
         self.transactions: List[TransactionResult] = []
         self.lamport_log: List[LamportRecord] = []
@@ -196,7 +179,6 @@ class Simulator:
         self.observed_clock_errors: List[float] = []
         self._build_queue()
 
-    # ------------------------------------------------------------------
     def _push_event(self, time: float, kind: str, payload: Any):
         ev = Event(time, self._tie_counter, kind, payload)
         heapq.heappush(self.event_queue, (ev.time, ev.tie, ev))
@@ -210,9 +192,8 @@ class Simulator:
             for sch in SYNC_SCHEDULE:
                 self._push_event(sch, "CristianSyncRequest", "GateMasuk")
                 self._push_event(sch, "CristianSyncRequest", "GateKeluar")
-        # Responses will be scheduled dynamically.
+        # Response akan dijadwalkan secara dinamis.
 
-    # ------------------------------------------------------------------
     def run(self) -> Dict[str, Any]:
         while self.event_queue:
             _, _, ev = heapq.heappop(self.event_queue)
@@ -235,12 +216,11 @@ class Simulator:
             "max_observed_error": max(self.observed_clock_errors) if self.observed_clock_errors else 0.0,
         }
 
-    # ------------------------------------------------------------------
-    # Vehicle entry processing
+    # Pemrosesan kendaraan masuk
     def _handle_vehicle_entry(self, vehicle: Vehicle):
         vt = self.vc.now
         entry_local = self.gate_masuk.local_time(vt)
-        # Record observed clock error for GateMasuk at this event
+        # Catat error clock yang teramati untuk GateMasuk pada event ini
         self.observed_clock_errors.append(abs(entry_local - vt))
         ts_send = self.lamport_masuk.send_event()
         self.lamport_log.append(LamportRecord(vt, "GateMasuk", "SEND", "ENTRY", vehicle.vid, ts_send))
@@ -252,25 +232,24 @@ class Simulator:
         ts_ack_recv = self.lamport_masuk.receive_event(ts_ack)
         self.lamport_log.append(LamportRecord(vt, "GateMasuk", "RECV", "ACK_ENTRY", vehicle.vid, ts_ack_recv))
 
-    # ------------------------------------------------------------------
-    # Vehicle exit processing
+    # Pemrosesan kendaraan keluar
     def _handle_vehicle_exit(self, vehicle: Vehicle):
         vt = self.vc.now
         exit_local = self.gate_keluar.local_time(vt)
-        # Record observed clock error for GateKeluar at this event
+        # Catat error clock yang teramati untuk GateKeluar pada event ini
         self.observed_clock_errors.append(abs(exit_local - vt))
-        # Request entry record
+        # Minta catatan masuk
         ts_req = self.lamport_keluar.send_event()
         self.lamport_log.append(LamportRecord(vt, "GateKeluar", "SEND", "REQ_ENTRY", vehicle.vid, ts_req))
         ts_srv_recv = self.lamport_server.receive_event(ts_req)
         self.lamport_log.append(LamportRecord(vt, "ServerPusat", "RECV", "REQ_ENTRY", vehicle.vid, ts_srv_recv))
-        # Server response with entry timestamp
+        # Response server dengan timestamp masuk
         ts_res = self.lamport_server.send_event()
         self.lamport_log.append(LamportRecord(vt, "ServerPusat", "SEND", "RESP_ENTRY", vehicle.vid, ts_res))
         ts_res_recv = self.lamport_keluar.receive_event(ts_res)
         self.lamport_log.append(LamportRecord(vt, "GateKeluar", "RECV", "RESP_ENTRY", vehicle.vid, ts_res_recv))
         entry_local, _ = self.server.entries[vehicle.vid]
-        # Exit transaction
+        # Transaksi keluar
         ts_exit_tx = self.lamport_keluar.send_event()
         self.lamport_log.append(LamportRecord(vt, "GateKeluar", "SEND", "EXIT_TX", vehicle.vid, ts_exit_tx))
         ts_srv_exit = self.lamport_server.receive_event(ts_exit_tx)
@@ -294,14 +273,13 @@ class Simulator:
         tariff, _ = calculate_tariff(vehicle.actual_duration)
         return tariff
 
-    # ------------------------------------------------------------------
-    # Cristian sync handling (request)
+    # Penanganan sinkronisasi Cristian (request)
     def _handle_sync_request(self, gate_name: str):
         vt = self.vc.now
         gate = self.gate_masuk if gate_name == "GateMasuk" else self.gate_keluar
         request_local = gate.local_time(vt)
         server_recv_vt = vt + REQ_DELAY
-        server_timestamp = server_recv_vt  # server clock equals virtual time
+        server_timestamp = server_recv_vt  # clock server sama dengan waktu virtual
         self._pending_sync[gate_name] = {
             "request_virtual": vt,
             "request_local": request_local,
@@ -310,10 +288,9 @@ class Simulator:
         response_time = vt + RTT
         self._push_event(response_time, "CristianSyncResponse", gate_name)
 
-    # ------------------------------------------------------------------
-    # Cristian sync handling (response)
+    # Penanganan sinkronisasi Cristian (response)
     def _handle_sync_response(self, gate_name: str):
-        vt = self.vc.now  # request_time + RTT
+        vt = self.vc.now  # waktu request + RTT
         info = self._pending_sync.pop(gate_name)
         gate = self.gate_masuk if gate_name == "GateMasuk" else self.gate_keluar
         request_virtual = info["request_virtual"]
@@ -342,11 +319,10 @@ class Simulator:
         )
         self.clock_errors.append(abs(error))
 
-# ------------------------------------------------------------
-# Self‑test suite
+# Rangkaian self‑test
 def run_self_tests(results_without: dict, results_with: dict) -> List[str]:
     msgs: List[str] = []
-    # 1. Sync log ordering
+    # 1. Urutan log sinkronisasi
     def check_sync_log_order(logs: List[SyncLog]):
         prev_resp = -float('inf')
         for log in logs:
@@ -360,7 +336,7 @@ def run_self_tests(results_without: dict, results_with: dict) -> List[str]:
     check_sync_log_order(results_without.get("sync_logs", []))
     check_sync_log_order(results_with.get("sync_logs", []))
     msgs.append("✔ Sync log ordering and monotonicity verified")
-    # 2. Sync timing and error magnitude
+    # 2. Waktu sinkronisasi dan besaran error
     for log in results_with["sync_logs"]:
         expected_response = log.request_virtual + RTT
         assert math.isclose(log.response_virtual, expected_response, rel_tol=1e-12), (
@@ -368,13 +344,13 @@ def run_self_tests(results_without: dict, results_with: dict) -> List[str]:
         )
         assert math.isclose(abs(log.error), 0.010, rel_tol=1e-9), f"Sync error magnitude not ~0.010 for {log.gate}"
     msgs.append("✔ Sync timing and error magnitude verified")
-    # 3. Both gates have sync logs
+    # 3. Log dari kedua gate
     gates = {log.gate for log in results_with["sync_logs"]}
     assert gates == {"GateMasuk", "GateKeluar"}, "Both gates must have sync logs"
     msgs.append("✔ Independent gate sync logs present")
-    # 4. Lamport causality and message count checks
+    # 4. Pemeriksaan kausalitas Lamport dan jumlah pesan
     def validate_lamport(logs: List[LamportRecord], scenario_name: str):
-        # Expected sender/receiver per message type
+        # Pengirim/penerima yang diproyeksikan untuk tiap tipe pesan
         expected_pair = {
             "ENTRY": ("GateMasuk", "ServerPusat"),
             "ACK_ENTRY": ("ServerPusat", "GateMasuk"),
@@ -389,7 +365,7 @@ def run_self_tests(results_without: dict, results_with: dict) -> List[str]:
         send_seen: set = set()
         for rec in logs:
             if rec.direction == "SEND":
-                # node must match expected sender
+                # node harus sesuai dengan pengirim yang diharapkan
                 expected_sender, _ = expected_pair[rec.message]
                 assert rec.node == expected_sender, f"SEND of {rec.message} from wrong node {rec.node} (expected {expected_sender}) in {scenario_name}"
                 key = (rec.message, rec.vehicle_id)
@@ -399,7 +375,7 @@ def run_self_tests(results_without: dict, results_with: dict) -> List[str]:
                 send_info[key] = (rec.lamport_ts, rec.virtual_time)
                 last_counter[rec.node] = rec.lamport_ts
             else:  # RECV
-                # node must match expected receiver
+                # node harus sesuai dengan penerima yang diproyeksikan
                 _, expected_receiver = expected_pair[rec.message]
                 assert rec.node == expected_receiver, f"RECV of {rec.message} at wrong node {rec.node} (expected {expected_receiver}) in {scenario_name}"
                 key = (rec.message, rec.vehicle_id)
@@ -407,28 +383,28 @@ def run_self_tests(results_without: dict, results_with: dict) -> List[str]:
                 recv_seen.add(key)
                 assert key in send_info, f"No matching SEND for RECV {rec} in {scenario_name}"
                 send_ts, send_vt = send_info[key]
-                # virtual time ordering
+                # Urutan waktu virtual
                 assert rec.virtual_time >= send_vt - 1e-12, f"Virtual time regression for {rec} in {scenario_name}"
-                # Lamport rule
+                # Aturan Lamport
                 expected_counter = max(last_counter[rec.node], send_ts) + 1
                 assert rec.lamport_ts == expected_counter, (
                     f"Lamport rule violation at {rec} (expected {expected_counter}) in {scenario_name}"
                 )
                 last_counter[rec.node] = rec.lamport_ts
-        # Ensure each message type sent exactly 4 times (one per vehicle)
+        # Pastikan setiap tipe pesan dikirim tepat 4 kali (satu per kendaraan)
         expected_msgs = {"ENTRY", "ACK_ENTRY", "REQ_ENTRY", "RESP_ENTRY", "EXIT_TX"}
         for mtype in expected_msgs:
             cnt = send_counts.get(mtype, 0)
             assert cnt == 4, f"Message {mtype} SEND occurs {cnt} times in {scenario_name}, expected 4"
-        # Ensure total SEND and RECV counts match expected 20 each
+        # Pastikan jumlah total SEND dan RECV masing-masing sesuai ekspektasi 20
         assert len(send_seen) == 20, f"Total SEND records {len(send_seen)} in {scenario_name}, expected 20"
         assert len(recv_seen) == 20, f"Total RECV records {len(recv_seen)} in {scenario_name}, expected 20"
-        # Total log length should be 40
+        # Panjang total log seharusnya 40
         assert len(logs) == 40, f"Lamport log length {len(logs)} in {scenario_name}, expected 40"
     validate_lamport(results_without["lamport_log"], "without sync")
     validate_lamport(results_with["lamport_log"], "with sync")
     msgs.append("✔ Lamport causality and message count validated for both scenarios")
-    # 5. Tariff correctness
+    # 5. Kebenaran tarif
     def tariff_check(res_list: List[TransactionResult], expect_all_correct: bool):
         correct = sum(1 for tr in res_list if tr.status == "OK" and tr.tariff == tr.expected_tariff)
         if expect_all_correct:
@@ -438,15 +414,14 @@ def run_self_tests(results_without: dict, results_with: dict) -> List[str]:
     tariff_check(results_without["transactions"], expect_all_correct=False)
     tariff_check(results_with["transactions"], expect_all_correct=True)
     msgs.append("✔ Tariff outcomes match acceptance criteria")
-    # 6. Vehicle A negative duration
+    # 6. Durasi negatif Kendaraan A
     veh_a = next(tr for tr in results_without["transactions"] if tr.vehicle_id == "A")
     assert veh_a.observed_duration < 0, "Vehicle A should have negative duration without sync"
     assert math.isclose(veh_a.observed_duration, -240.348, rel_tol=1e-3), f"Vehicle A duration mismatch: {veh_a.observed_duration}"
     msgs.append("✔ Vehicle A negative duration verified (≈ -240.348 s)")
     return msgs
 
-# ------------------------------------------------------------
-# Reporting helpers
+# Fungsi helper pelaporan
 def print_header(title: str):
     print("\n" + "=" * 80)
     print(title)
@@ -497,7 +472,7 @@ def print_comparison(results_without: dict, results_with: dict):
     neg_no = sum(1 for tr in results_without["transactions"] if tr.status == "INVALID")
     neg_yes = sum(1 for tr in results_with["transactions"] if tr.status == "INVALID")
     total_vehicles = len(results_without["transactions"])
-    sync_rounds = len(results_with["sync_logs"])  # number of response events (should be 10)
+    sync_rounds = len(results_with["sync_logs"])  # jumlah event response (seharusnya 10)
     immediate_sync_error = max(results_with.get("clock_errors", [0])) if results_with.get("clock_errors") else 0.0
     max_observed_error = results_with.get("max_observed_error", 0.0)
     print("| Metric                     | Tanpa Sync | Dengan Cristian |")
@@ -513,21 +488,20 @@ def print_comparison(results_without: dict, results_with: dict):
     print(f"| Max observed clock error (s) | -          | {max_observed_error:.6f} |")
     print()
 
-# ------------------------------------------------------------
 def main():
     vehicles = [
-        Vehicle("A", entry_virtual=60.0, exit_virtual=360.0),   # 5 min
-        Vehicle("B", entry_virtual=120.0, exit_virtual=4020.0), # 65 min
-        Vehicle("C", entry_virtual=180.0, exit_virtual=7680.0), # 125 min
-        Vehicle("D", entry_virtual=240.0, exit_virtual=5640.0), # 90 min
+        Vehicle("A", entry_virtual=60.0, exit_virtual=360.0),   # 5 menit
+        Vehicle("B", entry_virtual=120.0, exit_virtual=4020.0), # 65 menit
+        Vehicle("C", entry_virtual=180.0, exit_virtual=7680.0), # 125 menit
+        Vehicle("D", entry_virtual=240.0, exit_virtual=5640.0), # 90 menit
     ]
-    # Scenario 1: without sync
+    # Skenario 1: tanpa sinkronisasi
     sim_no = Simulator(with_sync=False, vehicles=vehicles)
     result_no = sim_no.run()
-    # Scenario 2: with sync
+    # Skenario 2: dengan sinkronisasi
     sim_yes = Simulator(with_sync=True, vehicles=vehicles)
     result_yes = sim_yes.run()
-    # Reporting
+    # Pelaporan
     print_header("SIMULASI PARKIR – Scenario 1 (Tanpa Sinkronisasi)")
     print_config(sim_no.gate_masuk, sim_no.gate_keluar)
     print_transaction_table(result_no["transactions"])
