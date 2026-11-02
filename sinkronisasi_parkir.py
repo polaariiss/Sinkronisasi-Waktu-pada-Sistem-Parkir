@@ -335,7 +335,7 @@ def run_self_tests(results_without: dict, results_with: dict) -> List[str]:
             prev_resp = log.response_virtual
     check_sync_log_order(results_without.get("sync_logs", []))
     check_sync_log_order(results_with.get("sync_logs", []))
-    msgs.append("✔ Sync log ordering and monotonicity verified")
+    msgs.append("Urutan dan monotonisitas log sinkronisasi terverifikasi")
     # 2. Waktu sinkronisasi dan besaran error
     for log in results_with["sync_logs"]:
         expected_response = log.request_virtual + RTT
@@ -343,11 +343,11 @@ def run_self_tests(results_without: dict, results_with: dict) -> List[str]:
             f"Sync response timing error for {log.gate}"
         )
         assert math.isclose(abs(log.error), 0.010, rel_tol=1e-9), f"Sync error magnitude not ~0.010 for {log.gate}"
-    msgs.append("✔ Sync timing and error magnitude verified")
+    msgs.append("Waktu sinkronisasi dan besaran error terverifikasi")
     # 3. Log dari kedua gate
     gates = {log.gate for log in results_with["sync_logs"]}
     assert gates == {"GateMasuk", "GateKeluar"}, "Both gates must have sync logs"
-    msgs.append("✔ Independent gate sync logs present")
+    msgs.append("Log sinkronisasi independen untuk kedua gate tersedia")
     # 4. Pemeriksaan kausalitas Lamport dan jumlah pesan
     def validate_lamport(logs: List[LamportRecord], scenario_name: str):
         # Pengirim/penerima yang diproyeksikan untuk tiap tipe pesan
@@ -403,7 +403,7 @@ def run_self_tests(results_without: dict, results_with: dict) -> List[str]:
         assert len(logs) == 40, f"Lamport log length {len(logs)} in {scenario_name}, expected 40"
     validate_lamport(results_without["lamport_log"], "without sync")
     validate_lamport(results_with["lamport_log"], "with sync")
-    msgs.append("✔ Lamport causality and message count validated for both scenarios")
+    msgs.append("Kausalitas Lamport dan jumlah pesan tervalidasi untuk kedua skenario")
     # 5. Kebenaran tarif
     def tariff_check(res_list: List[TransactionResult], expect_all_correct: bool):
         correct = sum(1 for tr in res_list if tr.status == "OK" and tr.tariff == tr.expected_tariff)
@@ -413,12 +413,12 @@ def run_self_tests(results_without: dict, results_with: dict) -> List[str]:
             assert correct == 1, f"Expected exactly 1 correct tariff without sync, got {correct}"
     tariff_check(results_without["transactions"], expect_all_correct=False)
     tariff_check(results_with["transactions"], expect_all_correct=True)
-    msgs.append("✔ Tariff outcomes match acceptance criteria")
+    msgs.append("Hasil tarif sesuai kriteria penerimaan")
     # 6. Durasi negatif Kendaraan A
     veh_a = next(tr for tr in results_without["transactions"] if tr.vehicle_id == "A")
     assert veh_a.observed_duration < 0, "Vehicle A should have negative duration without sync"
     assert math.isclose(veh_a.observed_duration, -240.348, rel_tol=1e-3), f"Vehicle A duration mismatch: {veh_a.observed_duration}"
-    msgs.append("✔ Vehicle A negative duration verified (≈ -240.348 s)")
+    msgs.append("Durasi negatif Kendaraan A terverifikasi (≈ -240.348 s)")
     return msgs
 
 # Fungsi helper pelaporan
@@ -513,7 +513,7 @@ def main():
     print_lamport_log(result_yes["lamport_log"])
     print_header("Perbandingan Kedua Scenario")
     print_comparison(result_no, result_yes)
-    print_header("Self‑test Suite Results")
+    print_header("Hasil Rangkaian Self-test")
     msgs = run_self_tests(result_no, result_yes)
     for m in msgs:
         print(m)
