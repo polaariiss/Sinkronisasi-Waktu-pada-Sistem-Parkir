@@ -193,6 +193,7 @@ class Simulator:
         self.lamport_log: List[LamportRecord] = []
         self.clock_errors: List[float] = []
         self._pending_sync: Dict[str, Dict[str, float]] = {}
+        self.observed_clock_errors: List[float] = []
         self._build_queue()
 
     # ------------------------------------------------------------------
@@ -231,6 +232,7 @@ class Simulator:
             "transactions": self.transactions,
             "lamport_log": self.lamport_log,
             "clock_errors": self.clock_errors,
+            "max_observed_error": max(self.observed_clock_errors) if self.observed_clock_errors else 0.0,
         }
 
     # ------------------------------------------------------------------
@@ -238,6 +240,8 @@ class Simulator:
     def _handle_vehicle_entry(self, vehicle: Vehicle):
         vt = self.vc.now
         entry_local = self.gate_masuk.local_time(vt)
+        # Record observed clock error for GateMasuk at this event
+        self.observed_clock_errors.append(abs(entry_local - vt))
         ts_send = self.lamport_masuk.send_event()
         self.lamport_log.append(LamportRecord(vt, "GateMasuk", "SEND", "ENTRY", vehicle.vid, ts_send))
         ts_recv = self.lamport_server.receive_event(ts_send)
@@ -253,6 +257,8 @@ class Simulator:
     def _handle_vehicle_exit(self, vehicle: Vehicle):
         vt = self.vc.now
         exit_local = self.gate_keluar.local_time(vt)
+        # Record observed clock error for GateKeluar at this event
+        self.observed_clock_errors.append(abs(exit_local - vt))
         # Request entry record
         ts_req = self.lamport_keluar.send_event()
         self.lamport_log.append(LamportRecord(vt, "GateKeluar", "SEND", "REQ_ENTRY", vehicle.vid, ts_req))
@@ -410,102 +416,6 @@ def run_self_tests(results_without: dict, results_with: dict) -> List[str]:
     assert math.isclose(veh_a.observed_duration, -240.348, rel_tol=1e-3), f"Vehicle A duration mismatch: {veh_a.observed_duration}"
     msgs.append("✔ Vehicle A negative duration verified (≈ -240.348 s)")
     return msgs
-    msgs: List[str] = []
-    # 1. Sync log ordering
-    def check_sync_log_order(logs: List[SyncLog]):
-        prev_resp = -float('inf')
-        for log in logs:
-            assert log.response_virtual >= log.request_virtual - 1e-12, (
-                f"Response before request for {log.gate} (req={log.request_virtual}, resp={log.response_virtual})"
-            )
-            assert log.response_virtual >= prev_resp - 1e-12, (
-                f"Sync logs not chronological for {log.gate} (prev={prev_resp}, cur={log.response_virtual})"
-            )
-            prev_resp = log.response_virtual
-    check_sync_log_order(results_without.get("sync_logs", []))
-    check_sync_log_order(results_with.get("sync_logs", []))
-    msgs.append("✔ Sync log ordering and monotonicity verified")
-    # 2. Sync timing and error magnitude
-    for log in results_with["sync_logs"]:
-        expected_response = log.request_virtual + RTT
-        assert math.isclose(log.response_virtual, expected_response, rel_tol=1e-12), (
-            f"Sync response timing error for {log.gate}"
-        )
-        assert math.isclose(abs(log.error), 0.010, rel_tol=1e-9), f"Sync error magnitude not ~0.010 for {log.gate}"
-    msgs.append("✔ Sync timing and error magnitude verified")
-    # 3. Both gates have sync logs
-    gates = {log.gate for log in results_with["sync_logs"]}
-    assert gates == {"GateMasuk", "GateKeluar"}, "Both gates must have sync logs"
-    msgs.append("✔ Independent gate sync logs present")
-    # 4. Lamport causality and message count checks
-    def validate_lamport(logs: List[LamportRecord], scenario_name: str):
-        # maintain latest counter per node
-        last: Dict[str, int] = {"GateMasuk": 0, "GateKeluar": 0, "ServerPusat": 0}
-        send_info: Dict[Tuple[str, Optional[str]], Tuple[int, float]] = {}
-        send_counts: Dict[str, int] = {}
-        for rec in logs:
-            if rec.direction == "SEND":
-                send_counts[rec.message] = send_counts.get(rec.message, 0) + 1
-                send_info[(rec.message, rec.vehicle_id)] = (rec.lamport_ts, rec.virtual_time)
-                last[rec.node] = rec.lamport_ts
-            else:  # RECV
-                key = (rec.message, rec.vehicle_id)
-                assert key in send_info, f"No matching SEND for RECV {rec} in {scenario_name}"
-                send_ts, send_vt = send_info[key]
-                assert rec.virtual_time >= send_vt - 1e-12, f"Virtual time regression for {rec} in {scenario_name}"
-                expected = max(last[rec.node], send_ts) + 1
-                assert rec.lamport_ts == expected, (
-                    f"Lamport rule violation at {rec} (expected {expected}) in {scenario_name}"
-                )
-                last[rec.node] = rec.lamport_ts
-        expected_msgs = {"ENTRY", "ACK_ENTRY", "REQ_ENTRY", "RESP_ENTRY", "EXIT_TX"}
-        for mtype in expected_msgs:
-            cnt = send_counts.get(mtype, 0)
-            assert cnt == 4, f"Message {mtype} SEND occurs {cnt} times in {scenario_name}, expected 4"
-        assert len(logs) == 40, f"Lamport log length {len(logs)} in {scenario_name}, expected 40"
-        last: Dict[str, int] = {"GateMasuk": 0, "GateKeluar": 0, "ServerPusat": 0}
-        send_info: Dict[Tuple[str, Optional[str]], Tuple[int, float]] = {}
-        msg_counts: Dict[str, int] = {}
-        for rec in logs:
-            if rec.direction == "SEND":
-                msg_counts[rec.message] = msg_counts.get(rec.message, 0) + 1
-                send_info[(rec.message, rec.vehicle_id)] = (rec.lamport_ts, rec.virtual_time)
-                last[rec.node] = rec.lamport_ts
-            else:  # RECV
-                msg_counts[rec.message] = msg_counts.get(rec.message, 0) + 1
-                key = (rec.message, rec.vehicle_id)
-                assert key in send_info, f"No matching SEND for RECV {rec} in {scenario_name}"
-                send_ts, send_vt = send_info[key]
-                assert rec.virtual_time >= send_vt - 1e-12, f"Virtual time regression for {rec} in {scenario_name}"
-                expected = max(last[rec.node], send_ts) + 1
-                assert rec.lamport_ts == expected, (
-                    f"Lamport rule violation at {rec} (expected {expected}) in {scenario_name}"
-                )
-                last[rec.node] = rec.lamport_ts
-        expected_msgs = {"ENTRY", "ACK_ENTRY", "REQ_ENTRY", "RESP_ENTRY", "EXIT_TX"}
-        for mtype in expected_msgs:
-            cnt = msg_counts.get(mtype, 0)
-            assert cnt == 4, f"Message {mtype} occurs {cnt} times in {scenario_name}, expected 4"
-        assert len(logs) == 40, f"Lamport log length {len(logs)} in {scenario_name}, expected 40"
-    validate_lamport(results_without["lamport_log"], "without sync")
-    validate_lamport(results_with["lamport_log"], "with sync")
-    msgs.append("✔ Lamport causality and message count validated for both scenarios")
-    # 5. Tariff correctness
-    def tariff_check(res_list: List[TransactionResult], expect_all_correct: bool):
-        correct = sum(1 for tr in res_list if tr.status == "OK" and tr.tariff == tr.expected_tariff)
-        if expect_all_correct:
-            assert correct == 4, f"Expected 4 correct tariffs, got {correct}"
-        else:
-            assert correct == 1, f"Expected exactly 1 correct tariff without sync, got {correct}"
-    tariff_check(results_without["transactions"], expect_all_correct=False)
-    tariff_check(results_with["transactions"], expect_all_correct=True)
-    msgs.append("✔ Tariff outcomes match acceptance criteria")
-    # 6. Vehicle A negative duration
-    veh_a = next(tr for tr in results_without["transactions"] if tr.vehicle_id == "A")
-    assert veh_a.observed_duration < 0, "Vehicle A should have negative duration without sync"
-    assert math.isclose(veh_a.observed_duration, -240.348, rel_tol=1e-3), f"Vehicle A duration mismatch: {veh_a.observed_duration}"
-    msgs.append("✔ Vehicle A negative duration verified (≈ -240.348 s)")
-    return msgs
 
 # ------------------------------------------------------------
 # Reporting helpers
@@ -525,7 +435,7 @@ def print_transaction_table(results: List[TransactionResult]):
     print("|-----------|-------------------|--------------------|--------------------|-------|--------|----------------|")
     for tr in results:
         dur = f"{tr.observed_duration:.3f}"
-        print(f"| {tr.vehicle_id}        | {tr.entry_local:.3f}          | {tr.exit_local:.3f}           | {dur:>18} | Rp{tr.tariff:,} | {tr.status} | Rp{tr.expected_tariff:,} |")
+        print(f"| {tr.vehicle_id:8} | {tr.entry_local:17.3f} | {tr.exit_local:18.3f} | {dur:>18} | Rp{tr.tariff:,} | {tr.status:6} | Rp{tr.expected_tariff:,} |")
     print()
 
 def print_sync_logs(logs: List[SyncLog]):
@@ -558,9 +468,10 @@ def print_comparison(results_without: dict, results_with: dict):
     correct_yes = sum(1 for tr in results_with["transactions"] if tr.status == "OK" and tr.tariff == tr.expected_tariff)
     neg_no = sum(1 for tr in results_without["transactions"] if tr.status == "INVALID")
     neg_yes = sum(1 for tr in results_with["transactions"] if tr.status == "INVALID")
-    total_vehicles = len(results_without["transactions"])  # same for both
+    total_vehicles = len(results_without["transactions"])
     sync_rounds = len(results_with["sync_logs"])  # number of response events (should be 10)
-    max_error = max(results_with.get("clock_errors", [0])) if results_with.get("clock_errors") else 0.0
+    immediate_sync_error = max(results_with.get("clock_errors", [0])) if results_with.get("clock_errors") else 0.0
+    max_observed_error = results_with.get("max_observed_error", 0.0)
     print("| Metric                     | Tanpa Sync | Dengan Cristian |")
     print("|----------------------------|------------|-----------------|")
     print(f"| Correct tariffs            | {correct_no}/4      | {correct_yes}/4         |")
@@ -569,7 +480,8 @@ def print_comparison(results_without: dict, results_with: dict):
     print(f"| Sinkronisasi aktif          | Tidak      | Ya               |")
     print(f"| Total vehicles processed    | {total_vehicles}          | {total_vehicles}               |")
     print(f"| Cristian sync rounds       | 0          | {sync_rounds}               |")
-    print(f"| Max clock error (s)        | -          | {max_error:.6f} |")
+    print(f"| Immediate sync error (s)   | -          | {immediate_sync_error:.6f} |")
+    print(f"| Max observed clock error (s) | -          | {max_observed_error:.6f} |")
     print()
 
 # ------------------------------------------------------------
